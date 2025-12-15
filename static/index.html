@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>People Counter</title>
+    <style>
+        :root {
+            --bg: #0b1120;
+            --panel: #0f172a;
+            --border: #1f2937;
+            --text: #e5e7eb;
+            --muted: #9ca3af;
+            --btn: #2563eb;
+            --btn2: #16a34a
+        }
+
+        * {
+            box-sizing: border-box;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text)
+        }
+
+        .app {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            min-height: 100vh
+        }
+
+        .sidebar {
+            border-right: 1px solid var(--border);
+            padding: 16px;
+            background: var(--panel)
+        }
+
+        .main {
+            padding: 16px
+        }
+
+        .h {
+            font-size: 18px;
+            font-weight: 700;
+            margin: 0 0 12px
+        }
+
+        .list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px
+        }
+
+        .item {
+            padding: 10px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            cursor: pointer;
+            background: #0b1224
+        }
+
+        .item.active {
+            outline: 2px solid #60a5fa
+        }
+
+        .muted {
+            color: var(--muted);
+            font-size: 12px
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px
+        }
+
+        .card {
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 12px;
+            background: var(--panel)
+        }
+
+        .row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap
+        }
+
+        button {
+            border: 0;
+            border-radius: 12px;
+            padding: 10px 12px;
+            color: #fff;
+            cursor: pointer;
+            font-weight: 600
+        }
+
+        .b1 {
+            background: var(--btn)
+        }
+
+        .b2 {
+            background: var(--btn2)
+        }
+
+        .b3 {
+            background: #9333ea
+        }
+
+        .danger {
+            background: #ef4444
+        }
+
+        video,
+        img {
+            width: 100%;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: #000
+        }
+
+        .modal {
+            position: fixed;
+            inset: 0;
+            display: none;
+            place-items: center;
+            background: rgba(0, 0, 0, .55)
+        }
+
+        .modal.on {
+            display: grid
+        }
+
+        .modal .box {
+            width: min(520px, 92vw);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            background: var(--panel);
+            padding: 14px
+        }
+
+        .modal .box h3 {
+            margin: 0 0 8px
+        }
+
+        .links a {
+            color: #93c5fd;
+            text-decoration: none
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <p class="h">Fuentes</p>
+            <div id="sources" class="list"></div>
+            <p class="muted" style="margin-top:12px;">Videos: carpeta media/. RTSP: sources.json</p>
+        </aside>
+
+        <main class="main">
+            <div class="grid">
+                <div class="card">
+                    <div class="row" style="justify-content:space-between;align-items:center">
+                        <div>
+                            <div class="h" style="margin:0">Preview</div>
+                            <div id="selInfo" class="muted">Seleccione una fuente</div>
+                        </div>
+                        <div id="status" class="muted"></div>
+                    </div>
+
+                    <div id="previewWrap" style="margin-top:10px;">
+                        <video id="vid" controls autoplay muted playsinline style="display:none"></video>
+                        <img id="mjpeg" alt="RTSP Preview" style="display:none" />
+                    </div>
+
+                    <div class="row" style="margin-top:12px">
+                        <button class="b1" id="btnAnalyze">Analizar video</button>
+                        <button class="b2" id="btnCsv">Descargar CSV</button>
+                        <button class="b3" id="btnHeat">Generar mapa de calor</button>
+                    </div>
+
+                    <div id="links" class="links muted" style="margin-top:10px;"></div>
+                </div>
+
+                <div class="card">
+                    <div class="h">Resultados</div>
+
+                    <div class="muted" style="margin-bottom:8px;">Heatmap (sin overlay)</div>
+                    <img id="heatImg" style="display:none" />
+
+                    <div class="muted" style="margin:10px 0 8px;">Heatmap overlay</div>
+                    <img id="overlayImg" style="display:none" />
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal análisis -->
+    <div id="modal" class="modal">
+        <div class="box">
+            <h3>Seleccionar modo</h3>
+            <p class="muted" style="margin-top:0">Rápido = yolov8n (frame-step). Lento = yolov8s.</p>
+            <div class="row">
+                <button class="b2" id="mFast">Analisis Poco Preciso</button>
+                <button class="b1" id="mSlow">Analisis Preciso</button>
+                <button class="danger" id="mClose">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal CSV -->
+    <div id="csvModal" class="modal">
+        <div class="box">
+            <h3>Descargar CSV</h3>
+            <p class="muted" style="margin-top:0">Elige cuál quieres descargar.</p>
+            <div class="row">
+                <button class="b2" id="csvPos">Positions (cx,cy)</button>
+                <button class="b1" id="csvCnt">Counts (por zona)</button>
+                <button class="danger" id="csvClose">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/source.js"></script>
+</body>
+
+</html>

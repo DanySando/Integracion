@@ -1,0 +1,10 @@
+{
+    "sources": [
+        {
+            "id": "demo2",
+            "name": "Demo 2",
+            "type": "video",
+            "path": "demo2.mp4"
+        }
+    ]
+}

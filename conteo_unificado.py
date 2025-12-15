@@ -2,6 +2,7 @@ import os
 import csv
 import argparse
 import datetime as dt
+import json
 
 import numpy as np
 import cv2
@@ -26,7 +27,67 @@ parser.add_argument("--append", action="store_true")
 parser.add_argument("--session", default=None)
 parser.add_argument("--start-datetime", default=None)
 
+parser.add_argument("--zones-file", default="zones.json",
+                    help="Ruta a zones.json (por defecto: zones.json en BASE_DIR)")
+
 args = parser.parse_args()
+
+
+DEFAULT_ZONES = {
+    "video_width": 2160,
+    "video_height": 3840,
+    "zones": [
+        {"id": 0, "name": "Zona 0", "points": [[540, 985], [1620, 985], [
+            2160, 1920], [1620, 2855], [540, 2855], [0, 1920]]},
+        {"id": 1, "name": "Zona 1", "points": [[0, 1920], [540, 985], [0, 0]]},
+        {"id": 2, "name": "Zona 2", "points": [
+            [1620, 985], [2160, 1920], [2160, 0]]},
+        {"id": 3, "name": "Zona 3", "points": [
+            [540, 985], [0, 0], [2160, 0], [1620, 985]]},
+        {"id": 4, "name": "Zona 4", "points": [
+            [0, 1920], [0, 3840], [540, 2855]]},
+        {"id": 5, "name": "Zona 5", "points": [
+            [2160, 1920], [1620, 2855], [2160, 3840]]},
+        {"id": 6, "name": "Zona 6", "points": [
+            [1620, 2855], [540, 2855], [0, 3840], [2160, 3840]]},
+    ],
+}
+
+
+def load_zones(zones_path: str, frame_w: int, frame_h: int):
+    data = None
+    try:
+        if zones_path and os.path.exists(zones_path):
+            with open(zones_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+    except Exception:
+        data = None
+
+    if not isinstance(data, dict) or "zones" not in data:
+        data = DEFAULT_ZONES
+
+    base_w = int(data.get("video_width") or frame_w or 1)
+    base_h = int(data.get("video_height") or frame_h or 1)
+    sx = float(frame_w) / float(base_w) if base_w > 0 else 1.0
+    sy = float(frame_h) / float(base_h) if base_h > 0 else 1.0
+
+    polys = []
+    for z in data.get("zones", []):
+        pts = z.get("points", [])
+        if not pts:
+            continue
+        arr = []
+        for p in pts:
+            try:
+                x = int(round(float(p[0]) * sx))
+                y = int(round(float(p[1]) * sy))
+                arr.append([x, y])
+            except Exception:
+                pass
+        if len(arr) >= 3:
+            polys.append(np.array(arr, np.int32))
+
+    return polys
 
 
 class CountObject:
@@ -47,18 +108,6 @@ class CountObject:
         os.makedirs(args.log_dir, exist_ok=True)
         self.session = args.session or dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         print(f"[INFO] Sesión: {self.session}", flush=True)
-
-        self.polygons = [
-            np.array([[540, 985], [1620, 985], [2160, 1920], [
-                     1620, 2855], [540, 2855], [0, 1920]], np.int32),
-            np.array([[0, 1920], [540, 985], [0, 0]], np.int32),
-            np.array([[1620, 985], [2160, 1920], [2160, 0]], np.int32),
-            np.array([[540, 985], [0, 0], [2160, 0], [1620, 985]], np.int32),
-            np.array([[0, 1920], [0, 3840], [540, 2855]], np.int32),
-            np.array([[2160, 1920], [1620, 2855], [2160, 3840]], np.int32),
-            np.array([[1620, 2855], [540, 2855], [
-                     0, 3840], [2160, 3840]], np.int32),
-        ]
 
         cap_tmp = cv2.VideoCapture(input_video_path)
         if not cap_tmp.isOpened():
@@ -88,6 +137,13 @@ class CountObject:
                 self.start_dt = dt.datetime.fromisoformat(args.start_datetime)
             except Exception:
                 self.start_dt = None
+
+        # cargar zonas (rescaladas al video)
+        self.polygons = load_zones(
+            args.zones_file, self.frame_width, self.frame_height)
+        if not self.polygons:
+            # fallback duro para no romper
+            self.polygons = load_zones("", self.frame_width, self.frame_height)
 
         self.zone_colors = [
             (0, 0, 255),
@@ -199,14 +255,8 @@ class CountObject:
 
         if xyxy.shape[0] == 0:
             for z_idx in range(len(self.polygons)):
-                rec_cnt = {
-                    "session": self.session,
-                    "frame": int(i),
-                    "ts": ts,
-                    "zone": int(z_idx),
-                    "count": 0,
-                    "fps": self.fps,
-                }
+                rec_cnt = {"session": self.session, "frame": int(
+                    i), "ts": ts, "zone": int(z_idx), "count": 0, "fps": self.fps}
                 if dt_iso:
                     rec_cnt["datetime"] = dt_iso
                 self.logs_counts.append(rec_cnt)
@@ -221,8 +271,8 @@ class CountObject:
 
             zone_idx = None
             for z_idx, poly in enumerate(self.polygons):
-                poly_for_cv = poly.reshape((-1, 1, 2))
-                inside_flag = cv2.pointPolygonTest(poly_for_cv, center, False)
+                inside_flag = cv2.pointPolygonTest(
+                    poly.reshape((-1, 1, 2)), center, False)
                 if inside_flag >= 0:
                     zone_idx = z_idx
                     break
@@ -252,31 +302,12 @@ class CountObject:
             self.logs_positions.append(rec_pos)
 
         for z_idx, c in enumerate(zone_counts):
-            rec_cnt = {
-                "session": self.session,
-                "frame": int(i),
-                "ts": ts,
-                "zone": int(z_idx),
-                "count": int(c),
-                "fps": self.fps,
-            }
+            rec_cnt = {"session": self.session, "frame": int(
+                i), "ts": ts, "zone": int(z_idx), "count": int(c), "fps": self.fps}
             if dt_iso:
                 rec_cnt["datetime"] = dt_iso
             self.logs_counts.append(rec_cnt)
 
-        for z_idx, poly in enumerate(self.polygons):
-            center_poly = np.mean(poly, axis=0).astype(int)
-            label = f"Z{z_idx}: {zone_counts[z_idx]}"
-            cv2.putText(
-                frame,
-                label,
-                (int(center_poly[0]), int(center_poly[1])),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1.0,
-                self.zone_colors[z_idx],
-                2,
-                cv2.LINE_AA,
-            )
         return frame
 
     def process_video(self):

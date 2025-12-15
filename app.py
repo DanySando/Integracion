@@ -22,6 +22,7 @@ RUNS_DIR = BASE_DIR / "runs"
 RUNS_DIR.mkdir(exist_ok=True)
 
 SOURCES_FILE = BASE_DIR / "sources.json"
+ZONES_FILE = BASE_DIR / "zones.json"
 
 app = FastAPI(title="People Counter Dashboard")
 
@@ -44,6 +45,17 @@ def get_source(source_id: str) -> Dict[str, Any]:
     raise KeyError(source_id)
 
 
+def load_zones() -> Dict[str, Any]:
+    if not ZONES_FILE.exists():
+        return {"video_width": 0, "video_height": 0, "zones": []}
+    return json.loads(ZONES_FILE.read_text(encoding="utf-8"))
+
+
+def save_zones(data: Dict[str, Any]) -> None:
+    ZONES_FILE.write_text(json.dumps(
+        data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 JOBS: Dict[str, Dict[str, Any]] = {}
 
 
@@ -62,6 +74,12 @@ class HeatmapReq(BaseModel):
     radius: int = 8
     blur: int = 31
     alpha: float = 0.6
+
+
+class ZonesPayload(BaseModel):
+    video_width: int
+    video_height: int
+    zones: List[Dict[str, Any]]
 
 
 def run_cmd(cmd, cwd=None) -> subprocess.CompletedProcess:
@@ -84,6 +102,28 @@ def root():
 @app.get("/api/sources")
 def api_sources():
     return load_sources()
+
+
+@app.get("/api/zones")
+def api_get_zones():
+    return load_zones()
+
+
+@app.post("/api/zones")
+def api_save_zones(payload: ZonesPayload):
+    # validación mínima
+    if payload.video_width <= 0 or payload.video_height <= 0:
+        raise HTTPException(400, "video_width/video_height inválidos")
+    if not payload.zones:
+        raise HTTPException(400, "zones vacío")
+
+    for z in payload.zones:
+        pts = z.get("points", [])
+        if not isinstance(pts, list) or len(pts) < 3:
+            raise HTTPException(400, "Cada zona debe tener >= 3 puntos")
+
+    save_zones(payload.model_dump())
+    return {"ok": True}
 
 
 @app.post("/api/analyze")
@@ -110,7 +150,6 @@ def api_analyze(req: AnalyzeReq):
         "run_dir": str(run_dir),
         "error": None,
         "artifacts": {},
-        # progreso
         "frames_done": 0,
         "frames_total": 0,
         "progress_pct": 0.0,
@@ -203,6 +242,8 @@ def run_analysis_job(job_id: str):
         if not script.exists():
             raise RuntimeError(f"No existe conteo_unificado.py en: {script}")
 
+        zones_arg = str(ZONES_FILE.resolve())
+
         if mode == "fast":
             cmd = [
                 sys.executable, str(script),
@@ -215,6 +256,7 @@ def run_analysis_job(job_id: str):
                 "--csv-prefix", csv_prefix,
                 "--session", session,
                 "--track",
+                "--zones-file", zones_arg,
             ]
         else:
             cmd = [
@@ -228,9 +270,9 @@ def run_analysis_job(job_id: str):
                 "--csv-prefix", csv_prefix,
                 "--session", session,
                 "--track",
+                "--zones-file", zones_arg,
             ]
 
-        # ejecutar con stdout en vivo
         proc = subprocess.Popen(
             cmd,
             cwd=str(BASE_DIR),
@@ -260,14 +302,11 @@ def run_analysis_job(job_id: str):
                 total = int(m2.group(2))
                 job["frames_done"] = done
                 job["frames_total"] = total
-                if total > 0:
-                    job["progress_pct"] = round((done / total) * 100.0, 2)
-                else:
-                    job["progress_pct"] = 0.0
+                job["progress_pct"] = round(
+                    (done / total) * 100.0, 2) if total > 0 else 0.0
 
         code = proc.wait()
 
-        # log completo
         (run_dir / "analysis_cmd.log").write_text(
             "CMD:\n" + " ".join(cmd) + "\n\nOUTPUT:\n" + "\n".join(out_lines),
             encoding="utf-8",
@@ -324,6 +363,8 @@ def api_heatmap(req: HeatmapReq):
     if not script.exists():
         raise HTTPException(500, f"No existe mapa_calor.py en: {script}")
 
+    zones_arg = str(ZONES_FILE.resolve())
+
     cmd = [
         sys.executable, str(script),
         "--logs-dir", str(run_dir),
@@ -336,6 +377,8 @@ def api_heatmap(req: HeatmapReq):
         "--clip-quantile", str(req.clip_quantile),
         "--gamma", str(req.gamma),
         "--alpha", str(req.alpha),
+        "--zones-file", zones_arg,
+        "--use-zones",
     ]
 
     if req.legend:
